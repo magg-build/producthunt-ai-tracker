@@ -77,11 +77,10 @@ jobs:
         path: data/*.md
         retention-days: 30
 
-  # 可选：推送到飞书
+  # 推送到飞书
   notify-feishu:
     needs: generate-report
     runs-on: ubuntu-latest
-    if: github.secrets.FEISHU_WEBHOOK_URL != ''
     
     steps:
     - name: Checkout repository
@@ -105,4 +104,9 @@ jobs:
       env:
         FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
       run: |
-        python scripts/send_to_feishu.py --period ${{ needs.generate-report.outputs.period }}
+        if [ -n "$FEISHU_WEBHOOK_URL" ]; then
+          echo "Sending to Feishu..."
+          python scripts/feishu_notifier.py
+        else
+          echo "FEISHU_WEBHOOK_URL not set, skipping notification"
+        fi

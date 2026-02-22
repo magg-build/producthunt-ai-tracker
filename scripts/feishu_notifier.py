@@ -1,161 +1,166 @@
+#!/usr/bin/env python3
 """
-飞书消息推送模块
-用于将 Product Hunt 报告推送到飞书群组
+发送 Product Hunt 报告到飞书
 """
 
 import os
-import requests
+import sys
 import json
-from typing import List, Dict
+import re
 from datetime import datetime
 
-class FeishuNotifier:
-    """飞书消息通知器"""
+# 添加 scripts 目录到路径
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import requests
+
+def parse_markdown_report(file_path):
+    """解析 Markdown 报告，提取产品信息"""
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
     
-    def __init__(self, webhook_url: str = None):
-        self.webhook_url = webhook_url or os.environ.get('FEISHU_WEBHOOK_URL')
+    products = []
     
-    def format_product_card(self, product: Dict, index: int) -> Dict:
-        """格式化单个产品为卡片元素"""
-        node = product.get("node", {})
-        
-        # 获取分类和受众
-        from scripts.tracker import ProductHuntAITracker
-        tracker = ProductHuntAITracker()
-        categories = tracker.categorize_project(product)
-        audience = tracker.analyze_target_audience(product)
-        
-        # 截断描述
-        description = node.get('description', '')[:100] + '...' if len(node.get('description', '')) > 100 else node.get('description', '')
-        
-        return {
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": f"**{index}. [{node.get('name')}]({node.get('url')})**\n"
-                          f"📝 {node.get('tagline')}\n"
-                          f"🏷️ {' | '.join(categories)}\n"
-                          f"👥 {audience}\n"
-                          f"👍 {node.get('votesCount', 0)} votes | [官网]({node.get('website', node.get('url'))})"
-            }
-        }
+    # 按 ### 分割，提取每个产品
+    sections = content.split('###')[1:]  # 跳过第一个（标题部分）
     
-    def send_daily_report(self, products: List[Dict], period: str = "daily") -> bool:
-        """发送日报到飞书"""
+    for section in sections:
+        lines = section.strip().split('\n')
+        if not lines:
+            continue
         
-        if not self.webhook_url:
-            print("❌ 未配置飞书 Webhook URL")
-            return False
+        # 第一行是产品名称
+        name = lines[0].strip()
         
-        period_names = {
-            "daily": "日榜",
-            "weekly": "周榜",
-            "monthly": "月榜", 
-            "yearly": "年榜"
-        }
+        # 提取信息
+        product_type = ""
+        audience = ""
+        features = ""
+        ph_url = ""
+        votes = "0"
         
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        period_name = period_names.get(period, "榜单")
+        for line in lines:
+            if '项目类型' in line:
+                product_type = line.split('**：')[-1].strip() if '**：' in line else ""
+            elif '使用人群' in line:
+                audience = line.split('**：')[-1].strip() if '**：' in line else ""
+            elif '核心功能' in line:
+                features = line.split('**：')[-1].strip() if '**：' in line else ""
+            elif 'Product Hunt:' in line:
+                ph_url = line.split('：')[-1].strip()
+            elif '投票数' in line:
+                match = re.search(r'(\d+)', line)
+                if match:
+                    votes = match.group(1)
         
-        # 构建卡片元素
-        elements = [
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": f"📊 **{period_name}** | {date_str}"
-                }
-            },
-            {"tag": "hr"}
-        ]
-        
-        # 添加产品信息
-        for i, product in enumerate(products[:5], 1):
-            elements.append(self.format_product_card(product, i))
-            elements.append({"tag": "hr"})
-        
-        # 添加页脚
-        elements.append({
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": "_数据来源：Product Hunt_"
-            }
+        products.append({
+            'name': name,
+            'type': product_type,
+            'audience': audience,
+            'features': features[:100] + '...' if len(features) > 100 else features,
+            'url': ph_url,
+            'votes': votes
         })
-        
-        # 构建卡片消息
-        card = {
-            "msg_type": "interactive",
-            "card": {
-                "config": {
-                    "wide_screen_mode": True
-                },
-                "header": {
-                    "title": {
-                        "tag": "plain_text",
-                        "content": "🔥 Product Hunt AI 项目日报"
-                    },
-                    "template": "blue"
-                },
-                "elements": elements
-            }
-        }
-        
-        try:
-            response = requests.post(
-                self.webhook_url,
-                json=card,
-                headers={"Content-Type": "application/json"},
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                if result.get("code") == 0:
-                    print("✅ 飞书消息发送成功")
-                    return True
-                else:
-                    print(f"❌ 飞书 API 错误: {result}")
-                    return False
-            else:
-                print(f"❌ HTTP 错误: {response.status_code}")
-                return False
-                
-        except Exception as e:
-            print(f"❌ 发送失败: {e}")
-            return False
-
-
-def send_simple_text(products: List[Dict], webhook_url: str = None) -> bool:
-    """发送简单文本消息（备用方案）"""
     
-    webhook_url = webhook_url or os.environ.get('FEISHU_WEBHOOK_URL')
+    return products
+
+def send_to_feishu(products, period="daily"):
+    """发送产品列表到飞书"""
+    
+    webhook_url = os.environ.get('FEISHU_WEBHOOK_URL')
     if not webhook_url:
+        print("❌ 未设置 FEISHU_WEBHOOK_URL 环境变量")
         return False
     
-    lines = ["🔥 Product Hunt AI 项目日报\n"]
+    period_names = {
+        "daily": "日榜",
+        "weekly": "周榜",
+        "monthly": "月榜",
+        "yearly": "年榜"
+    }
+    
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    period_name = period_names.get(period, "榜单")
+    
+    # 构建卡片内容
+    content_lines = [f"📊 **Product Hunt AI 项目 {period_name}** | {date_str}\n"]
     
     for i, product in enumerate(products[:5], 1):
-        node = product.get("node", {})
-        lines.append(f"{i}. {node.get('name')}")
-        lines.append(f"   {node.get('tagline')}")
-        lines.append(f"   👍 {node.get('votesCount')} | {node.get('url')}\n")
+        content_lines.append(f"**{i}. {product['name']}**")
+        content_lines.append(f"🏷️ {product['type']} | 👥 {product['audience']}")
+        content_lines.append(f"📝 {product['features']}")
+        content_lines.append(f"👍 {product['votes']} votes | [查看详情]({product['url']})")
+        content_lines.append("")
     
+    # 飞书文本消息
     message = {
         "msg_type": "text",
         "content": {
-            "text": "\n".join(lines)
+            "text": "\n".join(content_lines)
         }
     }
     
     try:
-        response = requests.post(webhook_url, json=message, timeout=10)
-        return response.status_code == 200 and response.json().get("code") == 0
-    except:
+        response = requests.post(
+            webhook_url,
+            json=message,
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("code") == 0:
+                print("✅ 飞书消息发送成功")
+                return True
+            else:
+                print(f"❌ 飞书 API 错误: {result}")
+                return False
+        else:
+            print(f"❌ HTTP 错误: {response.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ 发送失败: {e}")
         return False
 
+def main():
+    """主函数"""
+    # 查找最新的报告文件
+    data_dir = 'data'
+    if not os.path.exists(data_dir):
+        print(f"❌ 目录不存在: {data_dir}")
+        sys.exit(1)
+    
+    files = [f for f in os.listdir(data_dir) if f.startswith('PH-AI-') and f.endswith('.md')]
+    if not files:
+        print("❌ 未找到报告文件")
+        sys.exit(1)
+    
+    # 按时间排序，取最新的
+    files.sort(reverse=True)
+    latest_file = os.path.join(data_dir, files[0])
+    
+    print(f"📄 读取报告: {latest_file}")
+    
+    # 解析报告
+    products = parse_markdown_report(latest_file)
+    print(f"✅ 解析到 {len(products)} 个产品")
+    
+    # 提取榜单类型
+    period = "daily"
+    if 'weekly' in files[0]:
+        period = "weekly"
+    elif 'monthly' in files[0]:
+        period = "monthly"
+    elif 'yearly' in files[0]:
+        period = "yearly"
+    
+    # 发送到飞书
+    if products:
+        send_to_feishu(products, period)
+    else:
+        print("⚠️ 没有产品数据可发送")
 
 if __name__ == "__main__":
-    # 测试代码
-    print("飞书通知模块测试")
-    print("请设置 FEISHU_WEBHOOK_URL 环境变量后使用")
+    main()
