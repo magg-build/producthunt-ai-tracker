@@ -1,0 +1,36 @@
+{
+  "name": "producthunt-ai-tracker",
+  "description": "自动追踪 Product Hunt 热门 AI 项目，每日生成精选报告",
+  "version": "1.0.0",
+  "author": "OpenClaw",
+  "triggers": [
+    "product hunt",
+    "ph tracker",
+    "ai产品日报",
+    "producthunt"
+  ],
+  "actions": {
+    "daily_report": {
+      "description": "生成每日 AI 产品报告",
+      "command": "python scripts/tracker.py daily"
+    },
+    "weekly_report": {
+      "description": "生成每周 AI 产品报告",
+      "command": "python scripts/tracker.py weekly"
+    },
+    "monthly_report": {
+      "description": "生成每月 AI 产品报告",
+      "command": "python scripts/tracker.py monthly"
+    },
+    "yearly_report": {
+      "description": "生成每年 AI 产品报告",
+      "command": "python scripts/tracker.py yearly"
+    }
+  },
+  "requirements": [
+    "PRODUCTHUNT_DEVELOPER_TOKEN"
+  ],
+  "optional": [
+    "FEISHU_WEBHOOK_URL"
+  ]
+}
